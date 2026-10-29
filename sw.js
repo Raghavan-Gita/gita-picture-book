@@ -1,0 +1,4 @@
+const C='gita-ch1-v2',A=['./','index.html','manifest.webmanifest','icon-192.png','icon-512.png','icon-180.png'];
+self.addEventListener('install',e=>{e.waitUntil(caches.open(C).then(async c=>{await c.addAll(A);try{const r=await fetch('audio/index.json');if(r.ok){const j=await r.clone().json();await c.put('audio/index.json',r);await c.addAll(Object.values(j).map(x=>'audio/'+x.file))}}catch(e){}}));self.skipWaiting()});
+self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(k=>Promise.all(k.filter(x=>x!==C).map(x=>caches.delete(x)))));self.clients.claim()});
+self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;e.respondWith(caches.match(e.request,{ignoreSearch:true}).then(r=>r||fetch(e.request).then(res=>{const cp=res.clone();caches.open(C).then(c=>c.put(e.request,cp));return res}).catch(()=>caches.match('index.html'))))});

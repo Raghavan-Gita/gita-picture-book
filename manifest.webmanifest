@@ -1,0 +1,29 @@
+{
+ "name": "Gita Picture Book \u2013 Chapter 1",
+ "short_name": "Gita Ch.1",
+ "start_url": "./",
+ "scope": "./",
+ "display": "standalone",
+ "orientation": "portrait",
+ "background_color": "#f6eedd",
+ "theme_color": "#d9822b",
+ "description": "Bhagavad Gita Chapter 1, one illustrated and recited sloka at a time.",
+ "icons": [
+  {
+   "src": "icon-192.png",
+   "sizes": "192x192",
+   "type": "image/png"
+  },
+  {
+   "src": "icon-512.png",
+   "sizes": "512x512",
+   "type": "image/png"
+  },
+  {
+   "src": "icon-512.png",
+   "sizes": "512x512",
+   "type": "image/png",
+   "purpose": "maskable"
+  }
+ ]
+}
