@@ -598,12 +598,13 @@ window.MyVoice=(function(){
   function has(k){return have.has(k)||!!bundled[k]}
   function own(k){return have.has(k)}
   async function source(k){
-    if(have.has(k)){const v=await get(k);if(v&&v.blob)return {url:URL.createObjectURL(v.blob),dur:v.dur,own:true}}
+    if(have.has(k)){const v=await get(k);const b=blobOf(v);if(b&&b.size)return {url:URL.createObjectURL(b),dur:v.dur,own:true}}
     if(bundled[k])return {url:bundled[k].url,dur:bundled[k].dur};
     return null;
   }
   async function info(k){if(!have.has(k))return null;const v=await get(k);return v?{dur:v.dur,type:v.type}:null}
-  async function save(k,rec){await put(k,{blob:rec.blob,dur:rec.dur,type:rec.blob.type,at:Date.now()});have.add(k)}
+  async function save(k,rec){const buf=await rec.blob.arrayBuffer();await put(k,{buf,dur:rec.dur,type:rec.blob.type||'audio/mp4',at:Date.now()});have.add(k)}
+  const blobOf=v=>v?(v.buf?new Blob([v.buf],{type:v.type||'audio/mp4'}):v.blob||null):null;
   async function remove(k){await del(k);have.delete(k)}
   try{navigator.storage&&navigator.storage.persist&&navigator.storage.persist()}catch(e){}
 
@@ -656,8 +657,8 @@ window.MyVoice=(function(){
   const MIME={m4a:'audio/mp4',mp4:'audio/mp4',aac:'audio/aac',ogg:'audio/ogg',oga:'audio/ogg',opus:'audio/ogg',mp3:'audio/mpeg',wav:'audio/wav',webm:'audio/webm'};
   async function exportZip(){
     await refresh();const files=[],idx={};
-    for(const k of [...have].sort((a,b)=>parseInt(a)-parseInt(b)||a.localeCompare(b))){const r=await get(k);if(!r)continue;const [n,l]=k.split('-');const name=`1.${String(n).padStart(2,'0')}-${l}.${EXT(r.type||r.blob.type)}`;
-      files.push({name,data:new Uint8Array(await r.blob.arrayBuffer())});idx[k]={file:name,dur:+(r.dur||0).toFixed(2)}}
+    for(const k of [...have].sort((a,b)=>parseInt(a)-parseInt(b)||a.localeCompare(b))){const r=await get(k);const b=blobOf(r);if(!b)continue;const [n,l]=k.split('-');const name=`1.${String(n).padStart(2,'0')}-${l}.${EXT(r.type||b.type)}`;
+      files.push({name,data:new Uint8Array(await b.arrayBuffer())});idx[k]={file:name,dur:+(r.dur||0).toFixed(2)}}
     files.push({name:'index.json',data:new TextEncoder().encode(JSON.stringify(idx,null,1))});
     return {blob:zip(files),count:files.length-1};
   }
@@ -731,7 +732,7 @@ function show(n,{keepSpeech}={}){
   $('#txt').innerHTML=h; $('#mp').textContent=v.meaning;
   $('#bPrev').disabled=n===1; $('#bNext').disabled=n===N;
   if(!keepSpeech) window.scrollTo({top:0,behavior:'smooth'});
-  srcChip(); if(!$('#micSheet').classList.contains('hide')) fillMic();
+  $('#vnote').classList.add('hide'); preload(n); srcChip(); if(!$('#micSheet').classList.contains('hide')) fillMic();
 }
 function srcChip(){const a=S.own&&MyVoice.has(cur+'-sa'),b=S.own&&MyVoice.has(cur+'-en');$('#vsrc').innerHTML=(a||b)?`${ICON.mic}<span>Recited in your voice: ${a&&b?'Sanskrit + English':a?'Sanskrit':'English'}</span>`:'';$('#vsrc').classList.toggle('hide',!(a||b))}
 function dev(n){return String(n).replace(/\d/g,d=>'०१२३४५६७८९'[d])}
@@ -756,14 +757,21 @@ function say(text,{voice,lang,rate},t){return new Promise(res=>{
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
 function hl(i){document.querySelectorAll('.ln').forEach(e=>e.classList.toggle('on',+e.dataset.i===i));$('#mean').classList.toggle('on',i==='m')}
 const player=new Audio(); player.preload='auto';
-const SILENT='data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=';
-function unlock(){try{player.src=SILENT;const p=player.play();p&&p.catch(()=>{})}catch(e){}}
+const SILENT=(()=>{const n=1600,b=new ArrayBuffer(44+n*2),d=new DataView(b),w=(o,t)=>{for(let i=0;i<t.length;i++)d.setUint8(o+i,t.charCodeAt(i))};
+  w(0,'RIFF');d.setUint32(4,36+n*2,true);w(8,'WAVE');w(12,'fmt ');d.setUint32(16,16,true);d.setUint16(20,1,true);d.setUint16(22,1,true);d.setUint32(24,8000,true);d.setUint32(28,16000,true);d.setUint16(32,2,true);d.setUint16(34,16,true);w(36,'data');d.setUint32(40,n*2,true);
+  return URL.createObjectURL(new Blob([b],{type:'audio/wav'}))})();
+try{if(navigator.audioSession)navigator.audioSession.type='playback'}catch(e){}
+let unlocked=false;
+function unlock(){if(unlocked&&!player.paused)return;try{player.muted=false;player.src=SILENT;const p=player.play();if(p&&p.then)p.then(()=>{unlocked=true}).catch(()=>{});else unlocked=true}catch(e){}}
+let pre={n:0}, lastErr='';
+async function preload(n){await MyVoice.ready;const o=pre;pre={n,sa:await MyVoice.source(n+'-sa'),en:await MyVoice.source(n+'-en')};for(const k of ['sa','en'])if(o[k]&&o[k].own&&o[k]!==pre[k])setTimeout(()=>URL.revokeObjectURL(o[k].url),3000)}
+async function getSrc(n,l){if(pre.n!==n)await preload(n);return pre[l]||null}
 function playClip(src,t,marks){return new Promise(res=>{
   if(t!==token||!src) return res(false);
-  let done=false;const fin=ok=>{if(done)return;done=true;player.ontimeupdate=player.onended=player.onerror=null;if(src.own)setTimeout(()=>URL.revokeObjectURL(src.url),500);res(ok)};
-  player.onended=()=>fin(true); player.onerror=()=>fin(false);
+  let done=false;const fin=(ok,why)=>{if(done)return;done=true;if(!ok&&why)lastErr=why;player.ontimeupdate=player.onended=player.onerror=null;res(ok)};
+  player.onended=()=>fin(true); player.onerror=()=>fin(false,'the phone could not decode the recording'+(player.error?' (code '+player.error.code+')':''));
   player.ontimeupdate=()=>{if(t!==token){player.pause();return fin(false)}if(!marks)return;const d=isFinite(player.duration)&&player.duration>0?player.duration:(src.dur||0);if(!d)return;const f=player.currentTime/d;let m=marks[0].i;for(const x of marks)if(f>=x.at)m=x.i;hl(m)};
-  player.src=src.url; player.currentTime=0; const p=player.play(); if(p&&p.catch)p.catch(()=>fin(false));
+  player.src=src.url; player.currentTime=0; const p=player.play(); if(p&&p.catch)p.catch(e=>fin(false,e&&e.name==='NotAllowedError'?'the phone blocked audio playback':(e&&e.message)||'playback failed'));
 })}
 function lineMarks(v){const items=[];if(v.speaker)items.push({i:-1,w:clean(v.speaker).length*.8});v.lines.forEach((l,i)=>items.push({i,w:clean(l.sa||l.spk).length*(l.spk?.8:1)}));const tot=items.reduce((a,b)=>a+b.w,0);let acc=0;return items.map(x=>{const r={i:x.i,at:acc/tot};acc+=x.w;return r})}
 async function recite(){
@@ -771,10 +779,14 @@ async function recite(){
   await MyVoice.ready;
   while(t===token){
     const v=V[cur-1];
-    const saSrc=S.own?await MyVoice.source(cur+'-sa'):null;
+    const saSrc=S.own?await getSrc(cur,'sa'):null;
+    let ownOk=false;
     if(saSrc){
-      for(let r=0;r<S.repeat&&t===token;r++){ if(r>0) saSrc.url=(await MyVoice.source(cur+'-sa')).url; hl(v.speaker?-1:0); await playClip(saSrc,t,lineMarks(v)); await wait(400); }
-    } else {
+      for(let r=0;r<S.repeat&&t===token;r++){ hl(v.speaker?-1:0); ownOk=await playClip(saSrc,t,lineMarks(v)); if(!ownOk)break; await wait(400); }
+      if(!ownOk&&t===token) note(`Your Sanskrit recording for verse 1.${cur} could not play (${lastErr||'unknown reason'}). Using the phone voice instead. Tap Play again; if this keeps happening, re-record the verse in “My voice”.`);
+    }
+    if(t!==token) break;
+    if(!ownOk){
       if(!synth){toast('This browser has no speech voice. Record your own with “My voice”.');break}
       const voice=pickVoice(), opt={voice,lang:'hi-IN',rate:S.rate};
       if(!voice) note('No Hindi or Sanskrit voice was found on this phone, so the reading may sound wrong. On Android: Settings → Text-to-speech → Google → install Hindi. On iPhone: Settings → Accessibility → Spoken Content → Voices → Hindi. Or record the verse in your own voice with “My voice”.');
@@ -786,9 +798,10 @@ async function recite(){
     if(t!==token) break;
     if(S.meaning){
       hl('m');await wait(300);
-      const enSrc=S.own?await MyVoice.source(cur+'-en'):null;
-      if(enSrc) await playClip(enSrc,t,null);
-      else if(synth) await say(v.meaning.replace(/[“”]/g,'').normalize('NFD').replace(/[̀-ͯ]/g,''),{voice:enVoice(),lang:'en-IN',rate:Math.min(1,S.rate+.15)},t);
+      const enSrc=S.own?await getSrc(cur,'en'):null;
+      let enOk=false;
+      if(enSrc){enOk=await playClip(enSrc,t,null);if(!enOk&&t===token)note(`Your English recording for verse 1.${cur} could not play (${lastErr||'unknown reason'}). Using the phone voice instead.`)}
+      if(!enOk&&t===token&&synth) await say(v.meaning.replace(/[“”]/g,'').normalize('NFD').replace(/[̀-ͯ]/g,''),{voice:enVoice(),lang:'en-IN',rate:Math.min(1,S.rate+.15)},t);
     }
     hl(-2);
     if(!S.auto||cur===N||t!==token) break;
@@ -799,7 +812,7 @@ async function recite(){
 }
 function stopSpeech(){token++; playing=false; try{synth&&synth.cancel()}catch(e){} try{player.pause()}catch(e){} setPlay(); hl(-2)}
 function setPlay(){const b=$('#bPlay');b.innerHTML=playing?ICON.stop:ICON.play;b.classList.toggle('busy',playing);b.setAttribute('aria-label',playing?'Stop':'Recite')}
-function note(t){const n=$('#vnote');n.textContent=t;n.classList.remove('hide')}
+function note(t){const n=$('#vnote');if(!n.classList.contains('hide')&&n.textContent&&!n.textContent.includes(t))n.textContent+='\n\n'+t;else n.textContent=t;n.style.whiteSpace='pre-line';n.classList.remove('hide')}
 function toast(t){const d=document.createElement('div');d.className='toast';d.textContent=t;document.body.appendChild(d);setTimeout(()=>d.remove(),3200)}
 
 /* ---------- controls ---------- */
@@ -826,6 +839,7 @@ document.body.insertAdjacentHTML('beforeend',`<div class="scrim hide" id="scrim"
 <div class="row"><div>Show meaning</div><input type="checkbox" class="sw" id="sShowMean"></div>
 <div class="row"><div>Animate pictures</div><input type="checkbox" class="sw" id="sAnim"></div>
 <div class="row"><div>Text size</div><input type="range" id="sFs" min=".85" max="1.4" step=".05"></div>
+<div class="row"><div>App version<small>3 · 29 Oct 2026</small></div><span></span></div>
 <div class="row" style="border:0"><button class="btn alt" id="sTest">Test voice</button><button class="btn" id="sDone">Done</button></div></div>`);
 function openSheet(id){$('#scrim').classList.remove('hide');$(id).classList.remove('hide')}
 function closeSheets(){if(MyVoice.recording()){MyVoice.cancel();recUI(null)}try{player.pause()}catch(e){}['#scrim','#gridSheet','#setSheet','#micSheet'].forEach(i=>$(i).classList.add('hide'))}
@@ -879,14 +893,14 @@ $('#bMic').onclick=()=>{stopSpeech();if(!MyVoice.canRecord()&&!MyVoice.count('sa
 $('#micSheet').addEventListener('click',async e=>{
   const btn=e.target.closest('[data-act]'); if(!btn) return; const l=btn.closest('.recbox').dataset.l, k=cur+'-'+l, act=btn.dataset.act;
   if(act==='rec'){
-    if(recL===l){const r=await MyVoice.stop();recL=null;recUI(null);if(r&&r.dur>0.6&&r.blob.size>800){await MyVoice.save(k,r);toast('Saved');srcChip()}else toast('That was too short; try again');fillMic();return}
+    if(recL===l){const r=await MyVoice.stop();recL=null;recUI(null);if(r&&r.dur>0.6&&r.blob.size>800){await MyVoice.save(k,r);toast('Saved');pre={n:0};preload(cur);srcChip()}else toast('That was too short; try again');fillMic();return}
     if(recL){await MyVoice.stop();recL=null}
     try{player.pause()}catch(e){}
     if(!MyVoice.canRecord()) return toast('Recording is not available in this browser view. Open the installed app to record.');
     try{await MyVoice.start((lv,tm)=>recUI(l,lv,tm));recL=l;recUI(l,0,0)}catch(err){toast(err&&err.name==='NotAllowedError'?'Microphone permission was denied. Allow the microphone for this app in your phone settings.':'Could not start the microphone here.')}
   }
-  if(act==='play'){if(recL)return;const t=++token;unlock();const src=await MyVoice.source(k);if(src)playClip(src,t,null)}
-  if(act==='del'){if(recL)return;await MyVoice.remove(k);toast('Recording deleted');srcChip();fillMic()}
+  if(act==='play'){if(recL)return;const t=++token;unlock();const src=await getSrc(cur,l);if(src){const ok=await playClip(src,t,null);if(!ok&&t===token)toast('Could not play: '+(lastErr||'unknown reason'))}}
+  if(act==='del'){if(recL)return;await MyVoice.remove(k);toast('Recording deleted');pre={n:0};preload(cur);srcChip();fillMic()}
 });
 $('#mClose').onclick=closeSheets;
 $('#mPrev').onclick=()=>{if(recL)return;cur>1&&show(cur-1)};
@@ -896,7 +910,7 @@ $('#mExp').onclick=async()=>{
   const name='gita-ch1-my-voice.zip', file=new File([blob],name,{type:'application/zip'});
   try{if(navigator.canShare&&navigator.canShare({files:[file]})){await navigator.share({files:[file],title:'Gita Chapter 1 – my voice recordings'});return}}catch(e){if(e&&e.name==='AbortError')return}
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},2000);toast(`Saved ${count} recordings to ${name}`)};
-$('#mImp').onchange=async e=>{const fs=[...e.target.files];e.target.value='';if(!fs.length)return;try{const r=await MyVoice.importFiles(fs);toast(`Imported ${r.ok} recording${r.ok===1?'':'s'}${r.skipped.length?` · ${r.skipped.length} file(s) skipped (name them like 1.21-sa.m4a)`:''}`);fillMic();srcChip()}catch(err){toast('Import failed: '+err.message)}};
+$('#mImp').onchange=async e=>{const fs=[...e.target.files];e.target.value='';if(!fs.length)return;try{const r=await MyVoice.importFiles(fs);toast(`Imported ${r.ok} recording${r.ok===1?'':'s'}${r.skipped.length?` · ${r.skipped.length} file(s) skipped (name them like 1.21-sa.m4a)`:''}`);pre={n:0};preload(cur);fillMic();srcChip()}catch(err){toast('Import failed: '+err.message)}};
 MyVoice.ready.then(srcChip);
 
 /* ---------- cover + install ---------- */
